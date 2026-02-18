@@ -21,8 +21,7 @@
 
 - Data organization
 - CSV handling
-    - [polars](https://docs.pola.rs/user-guide/getting-started/)
-    - [polars API-ref](https://docs.pola.rs/api/python/stable/reference/)
+    - [pandas](https://docs.pola.rs/user-guide/getting-started/)
 
 ## Usage
 
