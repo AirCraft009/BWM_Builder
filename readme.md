@@ -1,7 +1,7 @@
 # BWM_BUILDER
 
 - Build accounting entries
-- All with a simple fotograph
+- All with a simple image
 
 ## Overwiev
 
@@ -17,6 +17,7 @@
 - Text recognition
     - [easyocr](https://pypi.org/project/easyocr/)
     - [easyocr Github](https://github.com/JaidedAI/EasyOCR)
+        - (torch, torchvision, torchaudio) - for easyorc
 
 - Data organization
 - CSV handling
