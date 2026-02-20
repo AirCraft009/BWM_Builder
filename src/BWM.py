@@ -1,143 +1,67 @@
-import easyocr
 import pandas as pd
 import re
+from PIL import Image
+import torch
+from transformers import LightOnOcrForConditionalGeneration, LightOnOcrProcessor
+import ruleset 
 
 class Bwm_builder:
-    def __init__(self, languages : list[str]) :
-        self.languages = languages
-        self.reader = easyocr.Reader(lang_list=self.languages)
-        self.probabilities = []
-        self.text_parts = []
-        self.flatText = ""
-        self.tokens = [dict]
+    def __init__(self) :
+        # decide platform apple(mps), nvidia(cuda) or cpu and set dtype accordingly
+        device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float32 if device == "mps" else torch.bfloat16
+
+        self.model = LightOnOcrForConditionalGeneration.from_pretrained("lightonai/LightOnOCR-2-1B", torch_dtype=dtype).to(device)
+        self.processor = LightOnOcrProcessor.from_pretrained("lightonai/LightOnOCR-2-1B")
+        print(f"Model loaded on {device} with dtype {dtype}")
         
+    def image_question(self, imagepath : str, question : str, maxTokens : int = 1024) -> str:
+        image = Image.open(imagepath)
+        conversation = [{"role": "user", "content": 
+            [{"type": "image", "image": image}, 
+                {"type": "text", "text": ruleset.ruleset + "\n\n" + question}]
+            }]
+
+        inputs = self.processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            temperature=0.0
+        )
+        inputs = {k: v.to(device=self.model.device, dtype=self.model.dtype) if v.is_floating_point() else v.to(self.model.device) for k, v in inputs.items()}
+
+        output_ids = self.model.generate(**inputs, max_new_tokens=maxTokens)
+
+        generated_ids = output_ids[0, inputs["input_ids"].shape[1]:]
+
+        output_text = self.processor.decode(generated_ids, skip_special_tokens=True)
         
-    def readImg(self, imgPath : str = ['en']) :
-        res = self.reader.readtext(imgPath)
-        for (bbox, text, prob) in res:
-            if (text == ""):
-                continue
-            self.text_parts.append(text.lower())
-            self.probabilities.append(prob)
-            
-    def __repr__ (self) :
-        return f"Bwm_builder('langs={self.languages}')"
+        return output_text
+                    
+    def extract_data(self, image_path):
+        
+        image = Image.open(image_path)
+        conversation = [{"role": "user", "content": [{"type": "image", "image": image}]}]
+
+        inputs = self.processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+            temperature=0.0,
+        )
+        inputs = {k: v.to(device=self.model.device, dtype=self.model.dtype) if v.is_floating_point() else v.to(self.model.device) for k, v in inputs.items()}
+
+        output_ids = self.model.generate(**inputs, max_new_tokens=1024)
+
+        generated_ids = output_ids[0, inputs["input_ids"].shape[1]:]
+
+        output_text = self.processor.decode(generated_ids, skip_special_tokens=True)
+        return output_text
     
-    def output(self):
-        print("BWM_builder")
-        for i in range(len(self.text_parts)) :
-            print(f"text={self.text_parts[i]}; prob={self.probabilities[i]}")
-
-    
-        """takes the broken textparts from ocr
-            flattens it then splits whitespaces
-            then removes every non number that is only one char
-        """
-    def _flattenText(self):
-        for text in self.text_parts :
-            self.flatText += text
-            
-    def _normalize_numeric_token(self, token: str) -> str:
-        t = token.strip()
-
-        # only normalize if token contains digits or number-like chars
-        if not re.search(r'\d', t):
-            return token
-
-        # common OCR mistakes
-        t = t.replace('o', '0')
-        t = t.replace('O', '0')
-
-        # remove invalid characters except digits and separators
-        t = re.sub(r'[^0-9,.\-%]', '', t)
-
-        # normalize multiple separators (optional refinement)
-        # example: 1.890,00 stays valid
-
-        return t
-    
-    def tokenize(self):
-        self._flattenText()
-        raw_tokens = re.split(r'\s+', self.flatText)
-
-        for raw in raw_tokens:
-            norm = self._normalize_numeric_token(raw)
-            classified = self._classify_token(norm)
-
-            self.tokens.append({
-                "raw": raw,
-                "normalized": norm,
-                "type": classified["type"],
-                "value": classified["value"]
-            })
-
-        return self.tokens
-
-    
-    def _classify_token(self, token: str) -> dict:
-        t = token.lower()
-
-        if re.fullmatch(r'atu\d{6,}', t):
-            return {"type": "uid", "value": t}
-
-        if re.fullmatch(r'\d+%', t):
-            return {"type": "percent", "value": t}
-
-        if re.fullmatch(r'\d{1,3}(?:[.,]\d{3})*[.,]\d{2}', t):
-            return {"type": "money", "value": t}
-
-        if re.fullmatch(r'\d+[.,]\d{2}', t):
-            return {"type": "money", "value": t}
-
-        if re.fullmatch(r'\d+', t):
-            return {"type": "number", "value": t}
-
-        return {"type": "text", "value": token}
-    
-    
-    def extract_rows(self):
-        rows = []
-        i = 0
-        n = len(self.tokens)
-
-        while i < n:
-
-            # look for money token pattern
-            if self.tokens[i]["type"] == "money":
-
-                # look ahead for second money token
-                if i + 1 < n and self.tokens[i + 1]["type"] == "money":
-
-                    # walk backwards to collect text
-                    j = i - 1
-                    text_self.tokens = []
-
-                    while j >= 0 and self.tokens[j]["type"] == "text":
-                        text_self.tokens.append(self.tokens[j]["value"])
-                        j -= 1
-
-                    text_self.tokens.reverse()
-
-                    if text_self.tokens:
-                        rows.append({
-                            "product": " ".join(text_self.tokens),
-                            "unit_price": self.tokens[i]["value"],
-                            "total": self.tokens[i + 1]["value"]
-                        })
-
-                    i += 2
-                    continue
-
-            i += 1
-
-        return rows
-
-
-
-
-    
-if __name__ == "__main__":
-    builder = Bwm_builder(['de'])
-    builder.readImg("tests/image.png")
-    builder.tokenize()
-    print(builder.tokens)
+        
+builder = Bwm_builder()
+print(builder.image_question("tests/Beispiel-Aufgabe.png", "Question : Extract the all information specified above and return it in the specified JSON format."))
